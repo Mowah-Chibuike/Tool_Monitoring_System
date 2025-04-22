@@ -1,6 +1,7 @@
 // Monitor temperature from temperature sensor
 // Monitor voltage from voltage sensor
 // Monitor current from current sensor
+// Handle the updating of the LCD screen
 
 #define POT_PIN 36
 #define ZERO_CROSS_PIN 23
