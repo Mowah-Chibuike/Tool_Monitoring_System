@@ -2,7 +2,6 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-// Monitor temperature from temperature sensor
 // Handle the updating of the LCD screen
 
 #define POT_PIN 36
@@ -15,21 +14,24 @@
 #define TEMP_SENSOR 25
 #define PULSES_PER_REV 1
 #define V_SENSITIVITY 573.00f
-#define C_SENSITIVITY 0.1 // mv/A according to datasheet for 20mA model
+#define C_SENSITIVITY 0.1 // V/A according to datasheet for ACS712 20mA model
 #define AC_FREQUENCY 50.0 // Hz
 
 ZMPT101B voltageSensor(VOLTAGE_SENSOR, AC_FREQUENCY);
+OneWire oneWire(TEMP_SENSOR);
+DallasTemperature tempSensor(&oneWire);
 
 #define ADC_HIGH 4095 // due to 12 bit ADC resolution of esp32
 #define AC_HALF_CYCLE_PERIOD 10000 // in microseconds
 
 int firingDelay = 0; // in microseconds
-bool zeroCrossDetected = false;
-bool iotControl = false;
+volatile bool zeroCrossDetected = false;
+volatile bool iotControl = false;
 volatile int pulseCount = 0;
 int rpm = 0;
 float voltageReading = 0;
 float currentReading = 0;
+float temperatureReading = 0;
 
 portMUX_TYPE taskMux = portMUX_INITIALIZER_UNLOCKED; // critical section mutex
 
@@ -54,7 +56,7 @@ void readPotTask(void *pvParameters) {
   int potValue;
 
   while (1) {
-    if (!iotControl) {
+    if (!iotControl) { // manual control
       potValue = analogRead(POT_PIN);
 
       // Map the potentiometer readings to timing for the firing delay
@@ -127,10 +129,18 @@ void currentTask(void *pvParameters) {
   }
 }
 
-
+// Monitor temperature from temperature sensor
+void temperatureTask(void *pvParameters) {
+  while (1) {
+    // request temperature reading
+    tempSensor.requestTemperatures();
+    temperatureReading = tempSensor.getTempCByIndex(0);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+}
 
 void setup() {
-
+  Serial.begin(115200);
   pinMode(POT_PIN, INPUT);
   pinMode(ZERO_CROSS_PIN, INPUT_PULLUP);
   pinMode(SCR_GATE_PIN, OUTPUT);
@@ -140,17 +150,19 @@ void setup() {
   pinMode(CURRENT_SENSOR, INPUT);
 
   voltageSensor.setSensitivity(V_SENSITIVITY);
+  tempSensor.begin();
 
   // Inteprete signals from the Zero-Crossing Detection Circuit (ZCDC)
   attachInterrupt(digitalPinToInterrupt(ZERO_CROSS_PIN), handleZeroCross, FALLING);
   attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON), handleButton, LOW);
   attachInterrupt(digitalPinToInterrupt(IR_SENSOR_PIN), handlePulse, FALLING);
 
-  xTaskCreatePinnedToCore(triggerSCRTask, "triggerSCRTask", 2048, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(triggerSCRTask, "triggerSCRTask", 2048, NULL, 3, NULL, 1);
   xTaskCreate(readPotTask, "readPotTask", 2048, NULL, 1, NULL);
-  xTaskCreatePinnedToCore(rpmTask, "rpmTask", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(rpmTask, "rpmTask", 2048, NULL, 2, NULL, 1);
   xTaskCreate(voltageTask, "voltageTask", 2048, NULL, 1, NULL);
   xTaskCreate(currentTask, "currentTask", 2048, NULL, 1, NULL);
+  xTaskCreate(temperatureTask, "temperatureTask", 2048, NULL, 1, NULL);
 }
 
 void loop() {
