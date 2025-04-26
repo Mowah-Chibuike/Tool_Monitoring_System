@@ -298,7 +298,7 @@ void setup() {
   xTaskCreatePinnedToCore(BlynkHandler, "Blynk Handler", 8192, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(monitorTask, "Monitor Task", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(wifiBlynkManagerTask, "WiFiBlynkManager", 4096, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(lcdTask, "LCD Task", 2048, NULL, 1, NULL);
+  xTaskCreatePinnedToCore(lcdTask, "LCD Task", 2048, NULL, 1, NULL, 1);
 }
 
 void loop() {
