@@ -4,13 +4,13 @@
 #define BLYNK_AUTH_TOKEN "lZqeBkxG9GFmkrAKzZsgLurUtXkNEgV-"
 
 #include <ZMPT101B.h>
+#include <Wire.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <BlynkSimpleEsp32.h>
-
-// Handle the updating of the LCD screen
+#include <LiquidCrystal_I2C.h>
 
 #define BLYNK_PRINT Serial
 
@@ -33,6 +33,7 @@ char pass[] = "4WER55YU85";
 ZMPT101B voltageSensor(VOLTAGE_SENSOR, AC_FREQUENCY);
 OneWire oneWire(TEMP_SENSOR);
 DallasTemperature tempSensor(&oneWire);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 #define ADC_HIGH 4095 // due to 12 bit ADC resolution of esp32
 #define AC_HALF_CYCLE_PERIOD 10000 // in microseconds
@@ -88,6 +89,8 @@ void triggerSCRTask(void *pvParameters) {
       digitalWrite(SCR_GATE_PIN, HIGH);
       delayMicroseconds(100);
       digitalWrite(SCR_GATE_PIN, LOW);
+    } else {
+      vTaskDelay(10 / portTICK_PERIOD_MS);
     }
   }
 }
@@ -154,10 +157,14 @@ void temperatureTask(void *pvParameters) {
 
 BLYNK_WRITE(V3) {
   iotControl = param.asInt();
+  Serial.print("IoTControl: ");
+  Serial.println(iotControl);
 }
 
 BLYNK_WRITE(V6) {
   firingDelay = map(param.asInt(), 0, 100, 0, AC_HALF_CYCLE_PERIOD);
+  Serial.print("New percentage speed: ");
+  Serial.println(param.asInt());
 }
 
 // Handle Blynk
@@ -165,14 +172,19 @@ void BlynkHandler(void *pvParameters) {
   float torque;
 
   while (1) {
-    Blynk.run();
-    if (!iotControl) Blynk.virtualWrite(V3, 0);
-    Blynk.virtualWrite(V0, voltageReading);
-    Blynk.virtualWrite(V1, currentReading);
-    Blynk.virtualWrite(V2, temperatureReading);
-    Blynk.virtualWrite(V5, rpm);
-    torque = (voltageReading * currentReading) / (2 * 3.142 * rpm / 60);
-    Blynk.virtualWrite(V4, torque);
+    if (Blynk.connected()) {
+      Blynk.run();
+      if (!iotControl) Blynk.virtualWrite(V3, 0);
+      Blynk.virtualWrite(V0, voltageReading);
+      Blynk.virtualWrite(V1, currentReading);
+      Blynk.virtualWrite(V2, temperatureReading);
+      Blynk.virtualWrite(V5, rpm);
+      torque = (voltageReading * currentReading) / (2 * 3.142 * rpm / 60);
+      Blynk.virtualWrite(V4, torque);
+    } else {
+      // Try reconnecting if not connected
+      Blynk.connect();
+    }
     vTaskDelay(100 / portTICK_PERIOD_MS);
   }
 }
@@ -182,6 +194,68 @@ void monitorTask(void *pvParameters) {
     Serial.print("Free Heap: ");
     Serial.println(ESP.getFreeHeap());
     vTaskDelay(5000 / portTICK_PERIOD_MS);
+  }
+}
+
+void wifiBlynkManagerTask(void *pvParameters) {
+  while (1) {
+    // If WiFi is not connected, reconnect
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[WiFi] Disconnected! Trying to reconnect...");
+      WiFi.disconnect();
+      WiFi.begin(ssid, pass);
+
+      // Wait for connection for up to 10 seconds
+      int retries = 0;
+      while (WiFi.status() != WL_CONNECTED && retries < 20) {
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        retries++;
+        Serial.print(".");
+      }
+      
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n[WiFi] Reconnected successfully.");
+      } else {
+        Serial.println("\n[WiFi] Failed to reconnect.");
+      }
+    }
+
+    // If WiFi is connected but Blynk is not connected
+    if (WiFi.status() == WL_CONNECTED && !Blynk.connected()) {
+      Serial.println("[Blynk] Disconnected! Trying to reconnect...");
+      Blynk.connect();
+      if (Blynk.connected()) {
+        Serial.println("[Blynk] Reconnected successfully.");
+      } else {
+        Serial.println("[Blynk] Failed to reconnect.");
+      }
+    }
+
+    vTaskDelay(5000 / portTICK_PERIOD_MS); // Check every 5 seconds
+  }
+}
+
+// Handle the updating of the LCD screen
+void lcdTask(void *pvParameters) {
+  lcd.init();
+  lcd.backlight();
+
+  while (1) {
+    lcd.clear();
+
+    lcd.setCursor(0, 0);
+    lcd.print("T:");
+    lcd.print(temperatureReading, 1);
+    lcd.print("C V:");
+    lcd.print(voltageReading, 1);
+
+    lcd.setCursor(0, 1);
+    lcd.print("I:");
+    lcd.print(currentReading, 1);
+    lcd.print("A R:");
+    lcd.print(rpm);
+
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
 }
 
@@ -196,7 +270,8 @@ void setup() {
   }
   Serial.println("\nConnected to WiFi");
 
-  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  Blynk.config(BLYNK_AUTH_TOKEN);
+  Blynk.connect();
 
   // Set pin modes
   pinMode(POT_PIN, INPUT);
@@ -209,28 +284,21 @@ void setup() {
 
   voltageSensor.setSensitivity(V_SENSITIVITY);
   tempSensor.begin();
-
   // Inteprete signals from the Zero-Crossing Detection Circuit (ZCDC)
   attachInterrupt(digitalPinToInterrupt(ZERO_CROSS_PIN), handleZeroCross, FALLING);
   attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON), handleButton, LOW);
   attachInterrupt(digitalPinToInterrupt(IR_SENSOR_PIN), handlePulse, FALLING);
 
   xTaskCreatePinnedToCore(triggerSCRTask, "triggerSCRTask", 2048, NULL, 3, NULL, 1);
-  Serial.println("Hello");
-  xTaskCreate(readPotTask, "readPotTask", 2048, NULL, 1, NULL);
-  Serial.println("Hello");
+  xTaskCreatePinnedToCore(readPotTask, "readPotTask", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(rpmTask, "rpmTask", 2048, NULL, 2, NULL, 1);
-  Serial.println("Hello");
-  xTaskCreate(voltageTask, "voltageTask", 2048, NULL, 1, NULL);
-  Serial.println("Hello");
-  xTaskCreate(currentTask, "currentTask", 2048, NULL, 1, NULL);
-  Serial.println("Hello");
-  xTaskCreate(temperatureTask, "temperatureTask", 2048, NULL, 1, NULL);
-  Serial.println("Hello");
-  xTaskCreate(BlynkHandler, "Blynk Handler", 2048, NULL, 1, NULL);
-  Serial.println("Hello");
-  xTaskCreate(monitorTask, "Monitor Task", 2048, NULL, 1, NULL);
-  Serial.println("Hello");
+  xTaskCreatePinnedToCore(voltageTask, "voltageTask", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(currentTask, "currentTask", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(temperatureTask, "temperatureTask", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(BlynkHandler, "Blynk Handler", 8192, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(monitorTask, "Monitor Task", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(wifiBlynkManagerTask, "WiFiBlynkManager", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(lcdTask, "LCD Task", 2048, NULL, 1, NULL);
 }
 
 void loop() {
