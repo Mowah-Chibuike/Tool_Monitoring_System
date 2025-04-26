@@ -1,8 +1,21 @@
+// Blynk Connectivity
+#define BLYNK_TEMPLATE_ID "TMPL27BKzsRQ4"
+#define BLYNK_TEMPLATE_NAME "Tool Monitoring System"
+#define BLYNK_AUTH_TOKEN "lZqeBkxG9GFmkrAKzZsgLurUtXkNEgV-"
+
 #include <ZMPT101B.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
 
 // Handle the updating of the LCD screen
+
+#define BLYNK_PRINT Serial
+
+char ssid[] = "MTN_4G_5EDE43";
+char pass[] = "4WER55YU85";
 
 #define POT_PIN 36
 #define ZERO_CROSS_PIN 23
@@ -79,18 +92,18 @@ void triggerSCRTask(void *pvParameters) {
   }
 }
 
-// Use IR sensor as a tachometer
-void rpmTask(void *pvParameters) {
-  int tempCount = 0;
+  // Use IR sensor as a tachometer
+  void rpmTask(void *pvParameters) {
+    int tempCount = 0;
 
-  while (1)
-  {
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    while (1)
+    {
+      vTaskDelay(1000 / portTICK_PERIOD_MS);
 
-    portENTER_CRITICAL(&taskMux);
-    tempCount = pulseCount;
-    pulseCount = 0;
-    portEXIT_CRITICAL(&taskMux);
+      portENTER_CRITICAL(&taskMux);
+      tempCount = pulseCount;
+      pulseCount = 0;
+      portEXIT_CRITICAL(&taskMux);
 
     rpm = (tempCount / PULSES_PER_REV) * 60;
     Serial.print("RPM: ");
@@ -139,8 +152,53 @@ void temperatureTask(void *pvParameters) {
   }
 }
 
+BLYNK_WRITE(V3) {
+  iotControl = param.asInt();
+}
+
+BLYNK_WRITE(V6) {
+  firingDelay = map(param.asInt(), 0, 100, 0, AC_HALF_CYCLE_PERIOD);
+}
+
+// Handle Blynk
+void BlynkHandler(void *pvParameters) {
+  float torque;
+
+  while (1) {
+    Blynk.run();
+    if (!iotControl) Blynk.virtualWrite(V3, 0);
+    Blynk.virtualWrite(V0, voltageReading);
+    Blynk.virtualWrite(V1, currentReading);
+    Blynk.virtualWrite(V2, temperatureReading);
+    Blynk.virtualWrite(V5, rpm);
+    torque = (voltageReading * currentReading) / (2 * 3.142 * rpm / 60);
+    Blynk.virtualWrite(V4, torque);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+  }
+}
+
+void monitorTask(void *pvParameters) {
+  while (1) {
+    Serial.print("Free Heap: ");
+    Serial.println(ESP.getFreeHeap());
+    vTaskDelay(5000 / portTICK_PERIOD_MS);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+
+  // Startup connection o IoT platform
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi");
+
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+  // Set pin modes
   pinMode(POT_PIN, INPUT);
   pinMode(ZERO_CROSS_PIN, INPUT_PULLUP);
   pinMode(SCR_GATE_PIN, OUTPUT);
@@ -158,13 +216,24 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(IR_SENSOR_PIN), handlePulse, FALLING);
 
   xTaskCreatePinnedToCore(triggerSCRTask, "triggerSCRTask", 2048, NULL, 3, NULL, 1);
+  Serial.println("Hello");
   xTaskCreate(readPotTask, "readPotTask", 2048, NULL, 1, NULL);
+  Serial.println("Hello");
   xTaskCreatePinnedToCore(rpmTask, "rpmTask", 2048, NULL, 2, NULL, 1);
+  Serial.println("Hello");
   xTaskCreate(voltageTask, "voltageTask", 2048, NULL, 1, NULL);
+  Serial.println("Hello");
   xTaskCreate(currentTask, "currentTask", 2048, NULL, 1, NULL);
+  Serial.println("Hello");
   xTaskCreate(temperatureTask, "temperatureTask", 2048, NULL, 1, NULL);
+  Serial.println("Hello");
+  xTaskCreate(BlynkHandler, "Blynk Handler", 2048, NULL, 1, NULL);
+  Serial.println("Hello");
+  xTaskCreate(monitorTask, "Monitor Task", 2048, NULL, 1, NULL);
+  Serial.println("Hello");
 }
 
 void loop() {
   // I'll just leave this nigga empty :)
 }
+
