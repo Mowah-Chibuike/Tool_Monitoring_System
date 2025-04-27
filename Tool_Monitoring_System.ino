@@ -20,9 +20,9 @@ char pass[] = "4WER55YU85";
 #define POT_PIN 36
 #define ZERO_CROSS_PIN 23
 #define SCR_GATE_PIN 26
-#define PUSH_BUTTON 21
+#define PUSH_BUTTON 14
 #define IR_SENSOR_PIN 27
-#define VOLTAGE_SENSOR 37
+#define VOLTAGE_SENSOR 35
 #define CURRENT_SENSOR 33
 #define TEMP_SENSOR 25
 #define PULSES_PER_REV 1
@@ -134,7 +134,6 @@ void currentTask(void *pvParameters) {
       raw = analogRead(CURRENT_SENSOR);
       voltage = raw - offset;
       sum += voltage * voltage;
-      vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 
     mean = sum / samples;
@@ -237,11 +236,10 @@ void wifiBlynkManagerTask(void *pvParameters) {
 
 // Handle the updating of the LCD screen
 void lcdTask(void *pvParameters) {
-  lcd.init();
-  lcd.backlight();
+ vTaskDelay(1000 / portTICK_PERIOD_MS);
 
   while (1) {
-    lcd.clear();
+    // lcd.clear();
 
     lcd.setCursor(0, 0);
     lcd.print("T:");
@@ -289,16 +287,20 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON), handleButton, LOW);
   attachInterrupt(digitalPinToInterrupt(IR_SENSOR_PIN), handlePulse, FALLING);
 
-  xTaskCreatePinnedToCore(triggerSCRTask, "triggerSCRTask", 2048, NULL, 3, NULL, 1);
+  Wire.begin();       // Make sure I2C bus is ready
+  lcd.init();
+  lcd.backlight();
+
+  xTaskCreatePinnedToCore(triggerSCRTask, "triggerSCRTask", 2048, NULL, 3, NULL, 0);
   xTaskCreatePinnedToCore(readPotTask, "readPotTask", 2048, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(rpmTask, "rpmTask", 2048, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(rpmTask, "rpmTask", 2048, NULL, 2, NULL, 0);
   xTaskCreatePinnedToCore(voltageTask, "voltageTask", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(currentTask, "currentTask", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(temperatureTask, "temperatureTask", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(BlynkHandler, "Blynk Handler", 8192, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(monitorTask, "Monitor Task", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(wifiBlynkManagerTask, "WiFiBlynkManager", 4096, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(lcdTask, "LCD Task", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(lcdTask, "LCD Task", 4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
